@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Audio Visualizer & Transcriber</title>
+    <style>
+      body {
+        font-family:
+          system-ui,
+          -apple-system,
+          sans-serif;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 2rem;
+      }
+      button {
+        padding: 12px 24px;
+        font-size: 1rem;
+        font-weight: 600;
+        cursor: pointer;
+        border-radius: 6px;
+        border: none;
+        background-color: #2563eb;
+        color: white;
+        transition: background-color 0.2s;
+      }
+      button:hover {
+        background-color: #1d4ed8;
+      }
+      canvas {
+        border: 1px solid #333;
+        background: #111;
+        margin-top: 1rem;
+        border-radius: 8px;
+      }
+      #transcriptBox {
+        margin-top: 1.5rem;
+        width: 100%;
+        max-width: 500px;
+        padding: 1rem;
+        border-radius: 6px;
+        border: 1px solid #e5e7eb;
+        background-color: #f9fafb;
+        font-size: 1rem;
+        line-height: 1.5;
+        min-height: 60px;
+        box-sizing: border-box;
+      }
+    </style>
+  </head>
+  <body>
+    <button id="recordBtn">Start Recording</button>
+    <canvas id="visualizer" width="500" height="120"></canvas>
+
+    <!-- Display element directly below the button & canvas -->
+    <div id="transcriptBox">Click "Start Recording" to begin.</div>
+
+    <script>
+      let mediaRecorder;
+      let audioChunks = [];
+      let isRecording = false;
+
+      let audioCtx;
+      let analyser;
+      let animationFrameId;
+
+      const recordBtn = document.getElementById('recordBtn');
+      const canvas = document.getElementById('visualizer');
+      const canvasCtx = canvas.getContext('2d');
+      const transcriptBox = document.getElementById('transcriptBox');
+
+      recordBtn.addEventListener('click', async () => {
+        if (!isRecording) {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            audio: true,
+          });
+
+          // --- Audio Visualizer setup ---
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          analyser = audioCtx.createAnalyser();
+          const source = audioCtx.createMediaStreamSource(stream);
+          source.connect(analyser);
+
+          analyser.fftSize = 256;
+          const bufferLength = analyser.frequencyBinCount;
+          const dataArray = new Uint8Array(bufferLength);
+
+          function draw() {
+            animationFrameId = requestAnimationFrame(draw);
+            analyser.getByteFrequencyData(dataArray);
+
+            canvasCtx.fillStyle = 'rgb(17, 17, 17)';
+            canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
+
+            const barWidth = (canvas.width / bufferLength) * 2.5;
+            let x = 0;
+
+            for (let i = 0; i < bufferLength; i++) {
+              const barHeight = dataArray[i] / 2;
+              canvasCtx.fillStyle = `rgb(${barHeight + 100}, 50, 250)`;
+              canvasCtx.fillRect(
+                x,
+                canvas.height - barHeight,
+                barWidth,
+                barHeight,
+              );
+              x += barWidth + 1;
+            }
+          }
+          draw();
+
+          // --- MediaRecorder setup ---
+          mediaRecorder = new MediaRecorder(stream);
+          audioChunks = [];
+
+          mediaRecorder.ondataavailable = (e) => {
+            if (e.data.size > 0) audioChunks.push(e.data);
+          };
+
+          mediaRecorder.onstop = async () => {
+            cancelAnimationFrame(animationFrameId);
+            if (audioCtx) audioCtx.close();
+
+            const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+            transcriptBox.innerText = 'Transcribing audio, please wait...';
+
+            const formData = new FormData();
+            formData.append('audio', audioBlob, 'recording.webm');
+
+            try {
+              const response = await fetch('/transcribe', {
+                method: 'POST',
+                body: formData,
+              });
+              const data = await response.json();
+
+              // Update UI with output text
+              if (data.transcript) {
+                transcriptBox.innerText = data.transcript;
+              } else {
+                transcriptBox.innerText = '(No speech detected)';
+              }
+            } catch (err) {
+              transcriptBox.innerText = 'Error transcribing audio.';
+              console.error(err);
+            }
+          };
+
+          mediaRecorder.start();
+          isRecording = true;
+          recordBtn.innerText = 'Stop & Transcribe';
+          recordBtn.style.backgroundColor = '#dc2626'; // Red when recording
+        } else {
+          mediaRecorder.stop();
+          mediaRecorder.stream.getTracks().forEach((track) => track.stop());
+          isRecording = false;
+          recordBtn.innerText = 'Start Recording';
+          recordBtn.style.backgroundColor = '#2563eb'; // Blue when idle
+        }
+      });
+    </script>
+  </body>
+</html>
